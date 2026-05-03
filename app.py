@@ -10,13 +10,12 @@ import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import streamlit as st
+from pyarrow.feather import read_feather
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
-DATA_DIR = os.environ.get(
-    "POLAR_DATA_DIR",
-    str(Path(__file__).parent.parent.parent / "data"),
-)
+
+DATA_DIR = Path("./")
 
 st.set_page_config(
     page_title="Polar Workout Dashboard",
@@ -45,101 +44,104 @@ def parse_zone_seconds(zones: list) -> dict:
 
 
 @st.cache_data(show_spinner="Parsing Polar data (one-time)…")
-def load_sessions(data_dir: str) -> pd.DataFrame:
-    files = sorted(glob.glob(os.path.join(data_dir, "training-session-*.json")))
-    rows = []
-    for fp in files:
-        try:
-            with open(fp) as f:
-                d = json.load(f)
-        except Exception:
-            continue
+def load_sessions():
+    return pd.read_feather("sessions.feather")
 
-        ex_list = d.get("exercises", [])
-        sport = ex_list[0].get("sport", "UNKNOWN") if ex_list else "UNKNOWN"
-        # aggregate zone time across exercises
-        z_total = {f"z{i}": 0.0 for i in range(1, 6)}
-        dist_total = 0.0
-        ascent_total = 0.0
-        descent_total = 0.0
-        for ex in ex_list:
-            dist_total += ex.get("distance") or 0.0
-            ascent_total += ex.get("ascent") or 0.0
-            descent_total += ex.get("descent") or 0.0
-            hr_zones = ex.get("zones", {}).get("heart_rate", [])
-            for k, v in parse_zone_seconds(hr_zones).items():
-                z_total[k] = z_total.get(k, 0.0) + v
-
-        # session-level distance fallback
-        if dist_total == 0.0:
-            dist_total = d.get("distance") or 0.0
-
-        row = {
-            "start": pd.to_datetime(d.get("startTime")),
-            "stop": pd.to_datetime(d.get("stopTime")),
-            "duration_s": parse_duration_seconds(d.get("duration")),
-            "sport": sport,
-            "avg_hr": d.get("averageHeartRate"),
-            "max_hr": d.get("maximumHeartRate"),
-            "kcal": d.get("kiloCalories"),
-            "feeling": float(d["feeling"]) if d.get("feeling") else None,
-            "distance_m": dist_total,
-            "ascent_m": ascent_total,
-            "descent_m": descent_total,
-            **z_total,
-        }
-        rows.append(row)
-
-    df = pd.DataFrame(rows)
-    df["duration_min"] = df["duration_s"] / 60
-    df["distance_km"] = df["distance_m"] / 1000
-    df["pace_min_km"] = np.where(
-        df["distance_km"] > 0,
-        df["duration_min"] / df["distance_km"],
-        np.nan,
-    )
-    df["speed_kmh"] = np.where(
-        df["duration_min"] > 0,
-        df["distance_km"] / (df["duration_min"] / 60),
-        np.nan,
-    )
-    df["week"] = df["start"].dt.to_period("W").apply(lambda p: p.start_time)
-    df["month"] = df["start"].dt.to_period("M").apply(lambda p: p.start_time)
-    df["year"] = df["start"].dt.year
-    df["dow"] = df["start"].dt.day_name()
-    df["hour"] = df["start"].dt.hour
-    return df
-
-
-@st.cache_data(show_spinner="Loading HR samples…")
-def load_hr_samples(data_dir: str, max_files: int = 500) -> pd.DataFrame:
-    """Load per-second HR traces for sessions that have them."""
-    files = sorted(glob.glob(os.path.join(data_dir, "training-session-*.json")))
-    rows = []
-    for fp in files[:max_files]:
-        try:
-            with open(fp) as f:
-                d = json.load(f)
-        except Exception:
-            continue
-        sport = (d.get("exercises") or [{}])[0].get("sport", "?")
-        for ex in d.get("exercises", []):
-            samples = ex.get("samples", {}).get("heartRate", [])
-            for s in samples:
-                rows.append(
-                    {
-                        "session": Path(fp).stem[:30],
-                        "sport": sport,
-                        "dt": pd.to_datetime(s["dateTime"]),
-                        "hr": s["value"],
-                    }
-                )
-    return pd.DataFrame(rows)
+# def parse_sessions_to_df(data_dir: str) -> pd.DataFrame:
+#     files = sorted(glob.glob(os.path.join(data_dir, "training-session-*.json")))
+#     rows = []
+#     for fp in files:
+#         try:
+#             with open(fp) as f:
+#                 d = json.load(f)
+#         except Exception:
+#             continue
+#
+#         ex_list = d.get("exercises", [])
+#         sport = ex_list[0].get("sport", "UNKNOWN") if ex_list else "UNKNOWN"
+#         # aggregate zone time across exercises
+#         z_total = {f"z{i}": 0.0 for i in range(1, 6)}
+#         dist_total = 0.0
+#         ascent_total = 0.0
+#         descent_total = 0.0
+#         for ex in ex_list:
+#             dist_total += ex.get("distance") or 0.0
+#             ascent_total += ex.get("ascent") or 0.0
+#             descent_total += ex.get("descent") or 0.0
+#             hr_zones = ex.get("zones", {}).get("heart_rate", [])
+#             for k, v in parse_zone_seconds(hr_zones).items():
+#                 z_total[k] = z_total.get(k, 0.0) + v
+#
+#         # session-level distance fallback
+#         if dist_total == 0.0:
+#             dist_total = d.get("distance") or 0.0
+#
+#         row = {
+#             "start": pd.to_datetime(d.get("startTime")),
+#             "stop": pd.to_datetime(d.get("stopTime")),
+#             "duration_s": parse_duration_seconds(d.get("duration")),
+#             "sport": sport,
+#             "avg_hr": d.get("averageHeartRate"),
+#             "max_hr": d.get("maximumHeartRate"),
+#             "kcal": d.get("kiloCalories"),
+#             "feeling": float(d["feeling"]) if d.get("feeling") else None,
+#             "distance_m": dist_total,
+#             "ascent_m": ascent_total,
+#             "descent_m": descent_total,
+#             **z_total,
+#         }
+#         rows.append(row)
+#
+#     df = pd.DataFrame(rows)
+#     df["duration_min"] = df["duration_s"] / 60
+#     df["distance_km"] = df["distance_m"] / 1000
+#     df["pace_min_km"] = np.where(
+#         df["distance_km"] > 0,
+#         df["duration_min"] / df["distance_km"],
+#         np.nan,
+#     )
+#     df["speed_kmh"] = np.where(
+#         df["duration_min"] > 0,
+#         df["distance_km"] / (df["duration_min"] / 60),
+#         np.nan,
+#     )
+#     df["week"] = df["start"].dt.to_period("W").apply(lambda p: p.start_time)
+#     df["month"] = df["start"].dt.to_period("M").apply(lambda p: p.start_time)
+#     df["year"] = df["start"].dt.year
+#     df["dow"] = df["start"].dt.day_name()
+#     df["hour"] = df["start"].dt.hour
+#     return df
+#
+#
+# @st.cache_data(show_spinner="Loading HR samples…")
+# def load_hr_samples(data_dir: str, max_files: int = 500) -> pd.DataFrame:
+#     """Load per-second HR traces for sessions that have them."""
+#     files = sorted(glob.glob(os.path.join(data_dir, "training-session-*.json")))
+#     rows = []
+#     for fp in files[:max_files]:
+#         try:
+#             with open(fp) as f:
+#                 d = json.load(f)
+#         except Exception:
+#             continue
+#         sport = (d.get("exercises") or [{}])[0].get("sport", "?")
+#         for ex in d.get("exercises", []):
+#             samples = ex.get("samples", {}).get("heartRate", [])
+#             for s in samples:
+#                 rows.append(
+#                     {
+#                         "session": Path(fp).stem[:30],
+#                         "sport": sport,
+#                         "dt": pd.to_datetime(s["dateTime"]),
+#                         "hr": s["value"],
+#                     }
+#                 )
+#     return pd.DataFrame(rows)
 
 
 # ── Sidebar ────────────────────────────────────────────────────────────────────
 
-df = load_sessions(DATA_DIR)
+df = load_sessions()
 
 with st.sidebar:
     st.title("🏃 Polar Dashboard")
@@ -222,8 +224,8 @@ with tab_vol:
         labels={"minutes": "Duration (min)", "period": resample},
         barmode="stack",
     )
-    fig_vol.update_layout(height=380, xaxis_tickangle=-45)
-    st.plotly_chart(fig_vol, use_container_width=True)
+    fig_vol.update_layout()
+    st.plotly_chart(fig_vol)
 
     col1, col2 = st.columns(2)
 
@@ -247,7 +249,7 @@ with tab_vol:
             hole=0.45,
         )
         fig_pie.update_traces(textinfo="label+percent")
-        st.plotly_chart(fig_pie, use_container_width=True)
+        st.plotly_chart(fig_pie)
 
     with col2:
         yearly = (
@@ -265,7 +267,7 @@ with tab_vol:
             barmode="stack",
         )
         fig_yr.update_layout(height=320)
-        st.plotly_chart(fig_yr, use_container_width=True)
+        st.plotly_chart(fig_yr)
 
     # Cumulative volume
     cum = dff.sort_values("start").assign(
@@ -281,7 +283,7 @@ with tab_vol:
         labels={"cum_hours": "Hours", "start": "Date"},
     )
     fig_cum.update_layout(height=320)
-    st.plotly_chart(fig_cum, use_container_width=True)
+    st.plotly_chart(fig_cum)
 
 # ── Tab 2: Heart Rate ──────────────────────────────────────────────────────────
 
@@ -301,7 +303,7 @@ with tab_hr:
             labels={"avg_hr": "Avg HR (bpm)"},
         )
         fig_hr_dist.update_layout(height=360)
-        st.plotly_chart(fig_hr_dist, use_container_width=True)
+        st.plotly_chart(fig_hr_dist)
 
     with col2:
         fig_hr_box = px.box(
@@ -315,7 +317,7 @@ with tab_hr:
             labels={"avg_hr": "Avg HR (bpm)"},
         )
         fig_hr_box.update_layout(height=360, showlegend=False)
-        st.plotly_chart(fig_hr_box, use_container_width=True)
+        st.plotly_chart(fig_hr_box)
 
     # HR trend over time (rolling 4w average)
     hr_time = (
@@ -337,7 +339,7 @@ with tab_hr:
         labels={"avg_hr": "Avg HR (bpm)", "start": "Date"},
     )
     fig_hr_trend.update_layout(height=340)
-    st.plotly_chart(fig_hr_trend, use_container_width=True)
+    st.plotly_chart(fig_hr_trend)
 
     # HR efficiency: avg HR vs duration
     fig_hr_dur = px.scatter(
@@ -352,7 +354,7 @@ with tab_hr:
         labels={"duration_min": "Duration (min)", "avg_hr": "Avg HR (bpm)"},
     )
     fig_hr_dur.update_layout(height=340)
-    st.plotly_chart(fig_hr_dur, use_container_width=True)
+    st.plotly_chart(fig_hr_dur)
 
 # ── Tab 3: HR Zones ────────────────────────────────────────────────────────────
 
@@ -391,7 +393,7 @@ with tab_zones:
             labels={"minutes": "Time (min)"},
             barmode="stack",
         )
-        st.plotly_chart(fig_zones, use_container_width=True)
+        st.plotly_chart(fig_zones)
 
         # Zone fractions per session over time
         for z in zone_cols:
@@ -418,7 +420,7 @@ with tab_zones:
             labels={"fraction": "Fraction of zone time", "month": "Month"},
         )
         fig_zone_time.update_layout(height=340, xaxis_tickangle=-45)
-        st.plotly_chart(fig_zone_time, use_container_width=True)
+        st.plotly_chart(fig_zone_time)
 
         # Polarization index: Z1+Z5 vs Z3
         dfz["polar_ratio"] = (dfz["z1"] + dfz["z5"]) / (dfz["z3"] + 1)
@@ -432,7 +434,7 @@ with tab_zones:
             labels={"polar_ratio": "(Z1+Z5) / Z3", "month": "Month"},
         )
         fig_pol.update_layout(height=300, xaxis_tickangle=-45)
-        st.plotly_chart(fig_pol, use_container_width=True)
+        st.plotly_chart(fig_pol)
 
 # ── Tab 4: Patterns ────────────────────────────────────────────────────────────
 
@@ -466,7 +468,7 @@ with tab_patterns:
             barmode="stack",
         )
         fig_dow.update_layout(height=340)
-        st.plotly_chart(fig_dow, use_container_width=True)
+        st.plotly_chart(fig_dow)
 
     with col2:
         hour_counts = dff.groupby(["hour", "sport"]).size().reset_index(name="count")
@@ -481,7 +483,7 @@ with tab_patterns:
             labels={"hour": "Hour (local time)"},
         )
         fig_hour.update_layout(height=340)
-        st.plotly_chart(fig_hour, use_container_width=True)
+        st.plotly_chart(fig_hour)
 
     # Heatmap: day of week × hour
     heat = (
@@ -503,7 +505,7 @@ with tab_patterns:
         aspect="auto",
     )
     fig_heat.update_layout(height=320)
-    st.plotly_chart(fig_heat, use_container_width=True)
+    st.plotly_chart(fig_heat)
 
     # Monthly kcal heatmap
     kcal_cal = (
@@ -540,7 +542,7 @@ with tab_patterns:
         aspect="auto",
     )
     fig_kcal.update_layout(height=320)
-    st.plotly_chart(fig_kcal, use_container_width=True)
+    st.plotly_chart(fig_kcal)
 
 # ── Tab 5: Speed & Pace ────────────────────────────────────────────────────────
 
@@ -566,7 +568,7 @@ with tab_speed:
                 labels={"pace_min_km": "Pace (min/km)"},
             )
             fig_pace.update_layout(height=340)
-            st.plotly_chart(fig_pace, use_container_width=True)
+            st.plotly_chart(fig_pace)
 
         with col2:
             fig_dist_box = px.box(
@@ -580,7 +582,7 @@ with tab_speed:
                 labels={"distance_km": "Distance (km)"},
             )
             fig_dist_box.update_layout(height=340, showlegend=False)
-            st.plotly_chart(fig_dist_box, use_container_width=True)
+            st.plotly_chart(fig_dist_box)
 
         # Pace trend over time
         pace_trend = (
@@ -603,7 +605,7 @@ with tab_speed:
             labels={"pace_min_km": "Pace (min/km)", "start": "Date"},
         )
         fig_pace_trend.update_layout(height=320, yaxis_autorange="reversed")
-        st.plotly_chart(fig_pace_trend, use_container_width=True)
+        st.plotly_chart(fig_pace_trend)
 
         # HR vs Pace scatter (aerobic efficiency proxy)
         fig_hr_pace = px.scatter(
@@ -619,7 +621,7 @@ with tab_speed:
             labels={"pace_min_km": "Pace (min/km)", "avg_hr": "Avg HR (bpm)"},
         )
         fig_hr_pace.update_layout(height=360)
-        st.plotly_chart(fig_hr_pace, use_container_width=True)
+        st.plotly_chart(fig_hr_pace)
 
 # ── Tab 6: Correlations ────────────────────────────────────────────────────────
 
@@ -652,7 +654,7 @@ with tab_corr:
         aspect="auto",
     )
     fig_corr.update_layout(height=520)
-    st.plotly_chart(fig_corr, use_container_width=True)
+    st.plotly_chart(fig_corr)
 
     # Scatter matrix for key variables
     scatter_vars = [
@@ -661,7 +663,7 @@ with tab_corr:
         if c in dff.columns
     ]
     fig_scatter = px.scatter_matrix(
-        dff.dropna(subset=scatter_vars).sample(min(1000, len(dff)), random_state=42),
+        dff.dropna(subset=scatter_vars).sample(min(1, len(dff)), random_state=42),
         dimensions=scatter_vars,
         color="sport",
         color_discrete_map=SPORT_COLORS,
@@ -670,15 +672,15 @@ with tab_corr:
     )
     fig_scatter.update_traces(diagonal_visible=False, marker_size=3)
     fig_scatter.update_layout(height=560)
-    st.plotly_chart(fig_scatter, use_container_width=True)
+    st.plotly_chart(fig_scatter)
 
 # ── Tab 7: Session Deep-Dive ───────────────────────────────────────────────────
 
 with tab_session:
     st.subheader("Per-session HR trace")
 
-    # Pick sessions that have HR samples
-    files = sorted(glob.glob(os.path.join(DATA_DIR, "training-session-*.json")))
+    # Pick sessions that have HR samples #TODO: change to pandas df
+    files = read_feather("sessions.feather")
     sessions_with_hr = []
     for fp in files:
         try:
@@ -784,7 +786,7 @@ with tab_session:
             )
             fig_trace.update_yaxes(title_text="HR (bpm)", secondary_y=False)
             fig_trace.update_yaxes(title_text="Speed (km/h)", secondary_y=True)
-            st.plotly_chart(fig_trace, use_container_width=True)
+            st.plotly_chart(fig_trace)
 
         # Session metadata table
         meta_cols = [
